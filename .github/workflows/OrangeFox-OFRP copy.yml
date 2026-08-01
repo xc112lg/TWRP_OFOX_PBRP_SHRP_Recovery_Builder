@@ -128,6 +128,30 @@ jobs:
         fi
         echo "Found image: $img_file"
 
+    - name: Fix update-binary in flashable zip
+      run: |
+        zip_file=$(find "${{ env.OUTPUT_DIR }}" -name "OrangeFox*.zip" -print -quit)
+        if [ -z "$zip_file" ]; then
+          echo "No OrangeFox zip found under ${{ env.OUTPUT_DIR }} — nothing to patch."
+          exit 0
+        fi
+        echo "Patching update-binary in $zip_file"
+        work_dir=$(mktemp -d)
+        unzip -o "$zip_file" META-INF/com/google/android/update-binary -d "$work_dir" >/dev/null
+        ub="$work_dir/META-INF/com/google/android/update-binary"
+        # SignApk re-zips without preserving Unix mode bits, so update-binary
+        # loses its executable bit; and #!/system/bin/sh doesn't exist yet
+        # when the updater is exec'd in recovery (system isn't mounted),
+        # so TWRP fails to run it at all (Updater process ended with ERROR: 255,
+        # no ui_print output). Fix both: shebang -> /sbin/sh, chmod 0755.
+        sed -i '1s|^#!/system/bin/sh|#!/sbin/sh|' "$ub"
+        chmod 0755 "$ub"
+        head -1 "$ub"
+        (cd "$work_dir" && zip -X "$zip_file" META-INF/com/google/android/update-binary)
+        rm -rf "$work_dir"
+        echo "Patched entry:"
+        unzip -l "$zip_file" | grep update-binary
+
     - name: Set Build Date # Build date in UTC
       run: |
         echo "BUILD_DATE=$(TZ=UTC date +%Y%m%d)" >> $GITHUB_ENV
