@@ -116,20 +116,26 @@ jobs:
           echo "::error::mka exited with code $BUILD_EXIT_CODE — build did not complete cleanly."
           exit $BUILD_EXIT_CODE
         fi
-        img_file=$(find "${{ env.OUTPUT_DIR }}" -name "${{ inputs.BUILD_TARGET }}*.img" -print -quit)
+        # OrangeFox's post-build hook (Fox_After_Recovery_Image) renames the
+        # finished image straight to OrangeFox-<ver>-<type>-<device>.img —
+        # a plain "recovery*.img"/"boot*.img" is never left behind. Check
+        # both patterns so a successful OrangeFox-renamed build isn't
+        # mistaken for a missing image.
+        img_file=$(find "${{ env.OUTPUT_DIR }}" \( -name "${{ inputs.BUILD_TARGET }}*.img" -o -name "OrangeFox*.img" \) -print -quit)
         if [ -z "$img_file" ]; then
-          echo "::error::mka reported success but no ${{ inputs.BUILD_TARGET }}*.img was found under ${{ env.OUTPUT_DIR }}. Check whether '${{ inputs.BUILD_TARGET }}image' is a valid make target for this device (e.g. BOARD_USES_RECOVERY_AS_BOOT may replace it with bootimage/vendorbootimage)."
+          echo "::error::mka reported success but no ${{ inputs.BUILD_TARGET }}*.img or OrangeFox*.img was found under ${{ env.OUTPUT_DIR }}. Check whether '${{ inputs.BUILD_TARGET }}image' is a valid make target for this device (e.g. BOARD_USES_RECOVERY_AS_BOOT may replace it with bootimage/vendorbootimage)."
           exit 1
         fi
+        echo "Found image: $img_file"
 
     - name: Set Build Date # Build date in UTC
       run: |
         echo "BUILD_DATE=$(TZ=UTC date +%Y%m%d)" >> $GITHUB_ENV
 
-    - name: Check if the recovery exists # It makes the recovery.img and renames it to Orangefox*.img but the OG should also work
+    - name: Check if the recovery exists # OrangeFox renames recovery.img to OrangeFox*.img — check that pattern, not the raw build-target name
       if: always()
       run: |
-        img_file=$(find "${{ env.OUTPUT_DIR }}" -name "${{ inputs.BUILD_TARGET }}*.img" -print -quit)
+        img_file=$(find "${{ env.OUTPUT_DIR }}" \( -name "${{ inputs.BUILD_TARGET }}*.img" -o -name "OrangeFox*.img" \) -print -quit)
         zip_file=$(find "${{ env.OUTPUT_DIR }}" -name "OrangeFox*.zip" -print -quit)
         if [ -f "$img_file" ]; then
             echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
