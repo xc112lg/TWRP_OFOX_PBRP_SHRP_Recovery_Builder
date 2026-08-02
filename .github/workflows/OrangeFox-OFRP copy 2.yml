@@ -1,4 +1,4 @@
-name: OrangeFox [OFRP] fix 1
+name: OrangeFox [OFRP] fix
 
 on:
   workflow_dispatch:
@@ -108,7 +108,17 @@ jobs:
         sed -i 's/return sandboxConfig\.working/return false/g' build/soong/ui/build/sandbox_linux.go
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch twrp_${{ inputs.DEVICE_NAME }}-eng && make clean && mka adbd ${{ inputs.BUILD_TARGET }}image
+        # TW_NO_USB_STORAGE=false is passed here, not just in BoardConfig.mk,
+        # because something downstream in the source tree keeps resetting it
+        # back to true regardless of the device tree's own setting (confirmed
+        # across multiple builds — BoardConfig.mk says false, recovery.log
+        # still prints true at boot). A command-line make variable sits above
+        # every in-tree ":=" assignment in Make's precedence order, so this
+        # should win regardless of where the override is coming from. If the
+        # next recovery.log STILL prints true even with this, the printed
+        # value isn't a compile-time flag at all and the investigation needs
+        # to move to TWRP's runtime/C++ defaults instead.
+        lunch twrp_${{ inputs.DEVICE_NAME }}-eng && make clean && mka adbd TW_NO_USB_STORAGE=false ${{ inputs.BUILD_TARGET }}image
         BUILD_EXIT_CODE=$?
         set -e
         popd
