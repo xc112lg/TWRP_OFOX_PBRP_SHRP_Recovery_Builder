@@ -1,4 +1,4 @@
-name: OrangeFox [OFRP] fix
+name: OrangeFox [OFRP] fix test
 
 on:
   workflow_dispatch:
