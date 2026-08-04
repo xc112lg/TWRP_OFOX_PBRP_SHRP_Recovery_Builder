@@ -82,6 +82,29 @@ jobs:
       with:
         max-size: "10G"
       
+    - name: Add Device Tree to local manifest
+      # repo sync always reads .repo/local_manifests/*.xml when it runs, even
+      # on the very first sync — so as long as this file exists before
+      # orangefox_sync.sh triggers `repo sync`, the device tree comes down
+      # together with the rest of the OrangeFox source, no separate clone
+      # step needed. DEVICE_TREE is split into a fetch base + project name
+      # so it works with any full git URL (GitHub, GitLab, self-hosted, etc).
+      run: |
+        mkdir -p ${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests
+        DEVICE_TREE_URL="${{ inputs.DEVICE_TREE }}"
+        DEVICE_TREE_URL="${DEVICE_TREE_URL%.git}"
+        FETCH_BASE="${DEVICE_TREE_URL%/*}"
+        PROJECT_NAME="${DEVICE_TREE_URL##*/}"
+        cat > ${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests/local_manifest.xml << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <manifest>
+          <remote name="devicetree_remote" fetch="${FETCH_BASE}" />
+          <project name="${PROJECT_NAME}" path="${{ inputs.DEVICE_PATH }}" remote="devicetree_remote" revision="${{ inputs.DEVICE_TREE_BRANCH }}" />
+        </manifest>
+        EOF
+        echo "Local manifest:"
+        cat ${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests/local_manifest.xml
+
     - name: Set-up Manifest # For github workspace use single {}
       run: |
         mkdir -p ${GITHUB_WORKSPACE}/OrangeFox
@@ -91,12 +114,13 @@ jobs:
         git clone https://gitlab.com/OrangeFox/sync.git -b master
         cd sync
         ./orangefox_sync.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
-      
-    - name: Clone Device Tree
+
+    - name: Get Device Tree commit ID
+      # The device tree is already in place from repo sync above (via the
+      # local manifest) — this step just records the commit that was checked
+      # out, it doesn't clone anything itself.
       run: |
-        cd ${{ env.ORANGEFOX_ROOT }}
-        git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./${{ inputs.DEVICE_PATH }}
-        cd ${{ inputs.DEVICE_PATH }}
+        cd ${{ env.ORANGEFOX_ROOT }}/${{ inputs.DEVICE_PATH }}
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
     - name: Building OrangeFox
