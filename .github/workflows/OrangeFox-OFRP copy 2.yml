@@ -11,8 +11,20 @@ on:
         options:
         - 12.1
         - 11.0
+      DEVICE_TREE:
+        description: 'Custom Recovery Tree'
+        required: true
+        default: ''
+      DEVICE_TREE_BRANCH:
+        description: 'Custom Recovery Tree Branch (use master if default)'
+        required: true
+        default: 'main'
       DEVICE_NAME:
-        description: 'Device Codename — must match one already listed in local_manifests.xml' # As is, just like your PRODUCT_DEVICE in your device tree.
+        description: 'Specify your Device Codename' # As is, just like your PRODUCT_DEVICE in your device tree.
+        required: true
+        default: ''
+      DEVICE_PATH:
+        description: 'Specify your Device Path (Check the DEVICE_PATH in BoardConfig.mk)' # As is, just like your DEVICE_PATH in your BoardConfig.mk
         required: true
         default: ''
       BUILD_TARGET:
@@ -70,21 +82,6 @@ jobs:
       with:
         max-size: "10G"
       
-    - name: Set up local manifest
-      # repo sync always reads .repo/local_manifests/*.xml when it runs, even
-      # on the very first sync — so as long as this file is in place before
-      # orangefox_sync.sh triggers `repo sync`, every project in it (all
-      # devices, common trees, kernel, vendor blobs, keys) comes down
-      # together with the OrangeFox source in one pass.
-      #
-      # Assumes local_manifests.xml is committed at the root of this repo.
-      # If you keep it elsewhere, update the source path below.
-      run: |
-        mkdir -p ${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests
-        cp ${{ github.workspace }}/local_manifests.xml ${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests/local_manifest.xml
-        echo "Local manifest in place:"
-        cat ${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests/local_manifest.xml
-
     - name: Set-up Manifest # For github workspace use single {}
       run: |
         mkdir -p ${GITHUB_WORKSPACE}/OrangeFox
@@ -94,44 +91,12 @@ jobs:
         git clone https://gitlab.com/OrangeFox/sync.git -b master
         cd sync
         ./orangefox_sync.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
-
-    - name: Resolve device tree from local manifest
-      # DEVICE_NAME is matched against each <project path="device/.../<name>">
-      # entry in the local manifest (the last path segment), so this works
-      # for any device that's already listed there — no per-device editing
-      # of the workflow needed when you add more devices to the manifest.
+      
+    - name: Clone Device Tree
       run: |
-        MANIFEST_FILE="${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests/local_manifest.xml"
-        DEVICE_INFO=$(python3 - "$MANIFEST_FILE" "${{ inputs.DEVICE_NAME }}" << 'PYEOF'
-        import sys
-        import xml.etree.ElementTree as ET
-
-        manifest_file, device_name = sys.argv[1], sys.argv[2]
-        root = ET.parse(manifest_file).getroot()
-        remotes = {r.get("name"): r.get("fetch") for r in root.findall("remote")}
-
-        match = None
-        for p in root.findall("project"):
-            path = p.get("path", "")
-            if path.startswith("device/") and path.rstrip("/").rsplit("/", 1)[-1] == device_name:
-                match = p
-                break
-
-        if match is None:
-            sys.exit(f"No device tree project found in local manifest for DEVICE_NAME={device_name}")
-
-        name = match.get("name")
-        revision = match.get("revision", "main")
-        fetch = (remotes.get(match.get("remote")) or "").rstrip("/")
-        print(f"{match.get('path')}|{fetch}/{name}|{revision}")
-        PYEOF
-        )
-        IFS='|' read -r DEVICE_PATH DEVICE_TREE DEVICE_TREE_BRANCH <<< "$DEVICE_INFO"
-        echo "DEVICE_PATH=${DEVICE_PATH}" >> $GITHUB_ENV
-        echo "DEVICE_TREE=${DEVICE_TREE}" >> $GITHUB_ENV
-        echo "DEVICE_TREE_BRANCH=${DEVICE_TREE_BRANCH}" >> $GITHUB_ENV
-        echo "Resolved: path=${DEVICE_PATH} tree=${DEVICE_TREE} branch=${DEVICE_TREE_BRANCH}"
-        cd ${{ env.ORANGEFOX_ROOT }}/${DEVICE_PATH}
+        cd ${{ env.ORANGEFOX_ROOT }}
+        git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./${{ inputs.DEVICE_PATH }}
+        cd ${{ inputs.DEVICE_PATH }}
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
     - name: Building OrangeFox
@@ -232,8 +197,8 @@ jobs:
         tag_name: ${{ github.run_id }}
         body: |
           Build: ${{ inputs.MANIFEST_BRANCH }}
-          Device: [Device Tree/Branch](${{ env.DEVICE_TREE }}/tree/${{ env.DEVICE_TREE_BRANCH }})
-          Commit: Most recent [commit](${{ env.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
+          Device: [Device Tree/Branch](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
+          Commit: Most recent [commit](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
           MD5 (img): ${{ env.MD5_IMG }}
           MD5 (zip): ${{ env.MD5_ZIP }}
         prerelease: true
