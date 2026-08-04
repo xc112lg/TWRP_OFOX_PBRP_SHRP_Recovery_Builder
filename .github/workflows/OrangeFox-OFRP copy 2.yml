@@ -23,10 +23,6 @@ on:
         description: 'Specify your Device Codename' # As is, just like your PRODUCT_DEVICE in your device tree.
         required: true
         default: ''
-      DEVICE_PATH:
-        description: 'Specify your Device Path (Check the DEVICE_PATH in BoardConfig.mk)' # As is, just like your DEVICE_PATH in your BoardConfig.mk
-        required: true
-        default: ''
       BUILD_TARGET:
         description: 'Specify your Build Target' # The image suffix will be added later in build step.
         required: true
@@ -89,17 +85,37 @@ jobs:
       # together with the rest of the OrangeFox source, no separate clone
       # step needed. DEVICE_TREE is split into a fetch base + project name
       # so it works with any full git URL (GitHub, GitLab, self-hosted, etc).
+      #
+      # There's no DEVICE_PATH input anymore (multi-device/common trees make
+      # a single fixed path meaningless), so the checkout path is derived
+      # from the repo name itself, following the standard
+      # android_device_<vendor>_<codename-or-common> convention used by
+      # nearly all AOSP/TWRP/OrangeFox device trees (e.g.
+      # "android_device_xiaomi_sm8250-common" -> "device/xiaomi/sm8250-common").
+      # If your repo doesn't follow that naming pattern, the fallback below
+      # just uses the repo name as-is under device/ — check the printed
+      # manifest and adjust PROJECT_PATH manually if that's wrong.
       run: |
         mkdir -p ${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests
         DEVICE_TREE_URL="${{ inputs.DEVICE_TREE }}"
         DEVICE_TREE_URL="${DEVICE_TREE_URL%.git}"
         FETCH_BASE="${DEVICE_TREE_URL%/*}"
         PROJECT_NAME="${DEVICE_TREE_URL##*/}"
+        if [[ "$PROJECT_NAME" == android_device_* ]]; then
+          REST="${PROJECT_NAME#android_device_}"
+          VENDOR="${REST%%_*}"
+          CODENAME="${REST#*_}"
+          PROJECT_PATH="device/${VENDOR}/${CODENAME}"
+        else
+          echo "::warning::'$PROJECT_NAME' doesn't match the android_device_<vendor>_<codename> convention — falling back to device/$PROJECT_NAME. Check the printed manifest below."
+          PROJECT_PATH="device/${PROJECT_NAME}"
+        fi
+        echo "DEVICE_PATH=${PROJECT_PATH}" >> $GITHUB_ENV
         cat > ${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests/local_manifest.xml << EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <manifest>
           <remote name="devicetree_remote" fetch="${FETCH_BASE}" />
-          <project name="${PROJECT_NAME}" path="${{ inputs.DEVICE_PATH }}" remote="devicetree_remote" revision="${{ inputs.DEVICE_TREE_BRANCH }}" />
+          <project name="${PROJECT_NAME}" path="${PROJECT_PATH}" remote="devicetree_remote" revision="${{ inputs.DEVICE_TREE_BRANCH }}" />
         </manifest>
         EOF
         echo "Local manifest:"
@@ -120,7 +136,7 @@ jobs:
       # local manifest) — this step just records the commit that was checked
       # out, it doesn't clone anything itself.
       run: |
-        cd ${{ env.ORANGEFOX_ROOT }}/${{ inputs.DEVICE_PATH }}
+        cd ${{ env.ORANGEFOX_ROOT }}/${{ env.DEVICE_PATH }}
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
     - name: Building OrangeFox
