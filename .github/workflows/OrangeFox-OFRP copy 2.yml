@@ -3,22 +3,14 @@ name: OrangeFox [OFRP] fix test
 on:
   workflow_dispatch:
     inputs:
+      MANIFEST_URL:
+        description: 'Your Manifest Repo URL (repo init -u)'
+        required: true
+        default: ''
       MANIFEST_BRANCH:
-        description: 'OrangeFox Manifest Branch'
+        description: 'Manifest Branch/Revision'
         required: true
         default: '12.1'
-        type: choice
-        options:
-        - 12.1
-        - 11.0
-      LOCAL_MANIFEST_URL:
-        description: 'Local Manifest Repo (optional — a git repo containing extra local_manifest .xml files to merge in during sync)'
-        required: false
-        default: ''
-      LOCAL_MANIFEST_BRANCH:
-        description: 'Local Manifest Branch'
-        required: false
-        default: 'main'
       DEVICE_TREE:
         description: 'Custom Recovery Tree'
         required: true
@@ -92,31 +84,11 @@ jobs:
       
     - name: Set-up Manifest # For github workspace use single {}
       run: |
-        mkdir -p ${GITHUB_WORKSPACE}/OrangeFox
-        cd ${GITHUB_WORKSPACE}/OrangeFox
+        mkdir -p ${{ env.ORANGEFOX_ROOT }}
+        cd ${{ env.ORANGEFOX_ROOT }}
         git config --global user.name "${{ github.actor }}"
         git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-        git clone https://gitlab.com/OrangeFox/sync.git -b master
-        cd sync
-        ./orangefox_sync.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
-
-    - name: Add Local Manifest
-      if: inputs.LOCAL_MANIFEST_URL != ''
-      run: |
-        cd ${{ env.ORANGEFOX_ROOT }}
-        mkdir -p .repo/local_manifests
-        tmp_dir=$(mktemp -d)
-        git clone ${{ inputs.LOCAL_MANIFEST_URL }} -b ${{ inputs.LOCAL_MANIFEST_BRANCH }} "$tmp_dir"
-        # Support either a repo whose root is full of .xml files, or one
-        # that nests them under a local_manifests/ folder.
-        if [ -d "$tmp_dir/local_manifests" ]; then
-          cp "$tmp_dir"/local_manifests/*.xml .repo/local_manifests/
-        else
-          cp "$tmp_dir"/*.xml .repo/local_manifests/
-        fi
-        rm -rf "$tmp_dir"
-        echo "Local manifest(s) added:"
-        ls -la .repo/local_manifests/
+        repo init -u ${{ inputs.MANIFEST_URL }} -b ${{ inputs.MANIFEST_BRANCH }}
         repo sync -c --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune -j$(nproc --all)
 
     - name: Clone Device Tree
