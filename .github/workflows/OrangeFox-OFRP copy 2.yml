@@ -28,7 +28,7 @@ on:
         required: false
         default: 'main'
       DEVICE_NAME:
-        description: 'Specify your Device Codename' # As is, just like your PRODUCT_DEVICE in your device tree.
+        description: 'Device Codename(s) — comma-separated for multi-device, e.g. h870, h872' # Must all be built by the same DEVICE_TREE/DEVICE_PATH below.
         required: true
         default: ''
       DEVICE_PATH:
@@ -55,14 +55,43 @@ on:
         default: 'system/bin/qseecomd'
 
 jobs:
-  build:
-    name: Build OFRP by ${{ github.actor }}
+  prepare:
+    name: Prepare device matrix
     runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
+    outputs:
+      devices: ${{ steps.set.outputs.devices }}
+    steps:
+    - name: Parse, dedupe and sort DEVICE_NAME
+      id: set
+      run: |
+        raw='${{ inputs.DEVICE_NAME }}'
+        json=$(echo "$raw" \
+          | tr ',' '\n' \
+          | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+          | grep -v '^$' \
+          | sort -u \
+          | jq -R -s -c 'split("\n")[:-1]')
+        if [ "$json" = "[]" ]; then
+          echo "::error::No valid device codenames found in DEVICE_NAME."
+          exit 1
+        fi
+        echo "devices=$json" >> "$GITHUB_OUTPUT"
+        echo "Sorted device matrix: $json"
+
+  build:
+    name: Build OFRP (${{ matrix.device }}) by ${{ github.actor }}
+    needs: prepare
+    runs-on: ubuntu-22.04
+    if: github.event.repository.owner.id == github.event.sender.id
+    strategy:
+      fail-fast: false
+      matrix:
+        device: ${{ fromJson(needs.prepare.outputs.devices) }}
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ORANGEFOX_ROOT: ${{ github.workspace }}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
-      OUTPUT_DIR: ${{ github.workspace }}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ inputs.DEVICE_NAME }}
+      OUTPUT_DIR: ${{ github.workspace }}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ matrix.device }}
 
     permissions:
       contents: write
@@ -134,7 +163,7 @@ jobs:
         # next recovery.log STILL prints true even with this, the printed
         # value isn't a compile-time flag at all and the investigation needs
         # to move to TWRP's runtime/C++ defaults instead.
-        lunch twrp_${{ inputs.DEVICE_NAME }}-eng && make clean && mka adbd TW_NO_USB_STORAGE=false ${{ inputs.BUILD_TARGET }}image
+        lunch twrp_${{ matrix.device }}-eng && make clean && mka adbd TW_NO_USB_STORAGE=false ${{ inputs.BUILD_TARGET }}image
         BUILD_EXIT_CODE=$?
         set -e
         popd
@@ -209,8 +238,8 @@ jobs:
           ${{ env.OUTPUT_DIR }}/OrangeFox*.tar
           ${{ env.OUTPUT_DIR }}/OrangeFox*.zip
           ${{ env.OUTPUT_DIR }}/ramdisk-recovery.*
-        name: Unofficial OrangeFox for ${{ inputs.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
-        tag_name: ${{ inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}-${{ github.run_id }}
+        name: Unofficial OrangeFox for ${{ matrix.device }} // ${{ env.BUILD_DATE }}
+        tag_name: ${{ matrix.device }}-${{ env.BUILD_DATE }}-${{ github.run_id }}
         body: |
           Build: ${{ inputs.MANIFEST_BRANCH }}
           Device: [Device Tree/Branch](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
@@ -223,9 +252,9 @@ jobs:
       if: inputs.LDCHECK == 'true'
       run: |
         cd tools
-        mv -n libneeds ${{ env.OUTPUT_DIR }}/${{ inputs.DEVICE_NAME }}/recovery/root/
-        mv -n ldcheck ${{ env.OUTPUT_DIR }}/${{ inputs.DEVICE_NAME }}/recovery/root/
-        cd ${{ env.OUTPUT_DIR }}/${{ inputs.DEVICE_NAME }}/recovery/root
+        mv -n libneeds ${{ env.OUTPUT_DIR }}/${{ matrix.device }}/recovery/root/
+        mv -n ldcheck ${{ env.OUTPUT_DIR }}/${{ matrix.device }}/recovery/root/
+        cd ${{ env.OUTPUT_DIR }}/${{ matrix.device }}/recovery/root
         python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ inputs.LDCHECKPATH }}
         echo "Done checking missing dependencies. Review, and reconfigure your tree."
       continue-on-error: true
