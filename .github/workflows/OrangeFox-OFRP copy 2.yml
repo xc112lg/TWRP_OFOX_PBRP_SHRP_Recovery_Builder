@@ -19,6 +19,14 @@ on:
         description: 'Custom Recovery Tree Branch (use master if default)'
         required: true
         default: 'main'
+      LOCAL_MANIFEST:
+        description: 'Local Manifest repo URL (optional — leave empty to skip)' # e.g. a repo containing local_manifest.xml with your device/kernel/vendor projects
+        required: false
+        default: ''
+      LOCAL_MANIFEST_BRANCH:
+        description: 'Local Manifest Branch'
+        required: false
+        default: 'main'
       DEVICE_NAME:
         description: 'Specify your Device Codename' # As is, just like your PRODUCT_DEVICE in your device tree.
         required: true
@@ -91,7 +99,15 @@ jobs:
         git clone https://gitlab.com/OrangeFox/sync.git -b master
         cd sync
         ./orangefox_sync.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
-      
+
+    - name: Apply Local Manifest
+      if: inputs.LOCAL_MANIFEST != ''
+      run: |
+        cd ${{ env.ORANGEFOX_ROOT }}
+        rm -rf .repo/local_manifests
+        git clone ${{ inputs.LOCAL_MANIFEST }} -b ${{ inputs.LOCAL_MANIFEST_BRANCH }} .repo/local_manifests
+        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
     - name: Clone Device Tree
       run: |
         cd ${{ env.ORANGEFOX_ROOT }}
@@ -194,7 +210,7 @@ jobs:
           ${{ env.OUTPUT_DIR }}/OrangeFox*.zip
           ${{ env.OUTPUT_DIR }}/ramdisk-recovery.*
         name: Unofficial OrangeFox for ${{ inputs.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
-        tag_name: ${{ github.run_id }}
+        tag_name: ${{ inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}-${{ github.run_id }}
         body: |
           Build: ${{ inputs.MANIFEST_BRANCH }}
           Device: [Device Tree/Branch](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
