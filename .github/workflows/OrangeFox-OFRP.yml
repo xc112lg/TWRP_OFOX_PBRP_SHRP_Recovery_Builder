@@ -1,4 +1,4 @@
-name: OrangeFox [OFRP]
+name: OrangeFox [OFRP] fix test 1
 
 on:
   workflow_dispatch:
@@ -11,22 +11,18 @@ on:
         options:
         - 12.1
         - 11.0
-      DEVICE_TREE:
-        description: 'Custom Recovery Tree'
+      LOCAL_MANIFEST:
+        description: 'Local Manifest repo URL (contains your device/kernel/vendor projects)'
         required: true
-        default: 'https://github.com/<username>/<repo_name>'
-      DEVICE_TREE_BRANCH:
-        description: 'Custom Recovery Tree Branch (use master if default)'
-        required: true
-        default: 'your_branch_name'
+        default: ''
+      LOCAL_MANIFEST_BRANCH:
+        description: 'Local Manifest Branch'
+        required: false
+        default: 'main'
       DEVICE_NAME:
-        description: 'Specify your Device Codename' # As is, just like your PRODUCT_DEVICE in your device tree.
+        description: 'Device Codename(s) — comma-separated for multi-device, e.g. h870, h872' # Must all be provided by the same LOCAL_MANIFEST above. Devices are built one-after-another on a single runner.
         required: true
-        default: '7304X'
-      DEVICE_PATH:
-        description: 'Specify your Device Path (Check the DEVICE_PATH in BoardConfig.mk)' # As is, just like your DEVICE_PATH in your BoardConfig.mk
-        required: true
-        default: 'device/device`s_company/Codename'
+        default: ''
       BUILD_TARGET:
         description: 'Specify your Build Target' # The image suffix will be added later in build step.
         required: true
@@ -48,20 +44,36 @@ on:
 
 jobs:
   build:
-    name: Build OFRP by ${{ github.actor }}
+    name: Build OFRP (sequential) by ${{ github.actor }}
     runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ORANGEFOX_ROOT: ${{ github.workspace }}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
-      OUTPUT_DIR: ${{ github.workspace }}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ inputs.DEVICE_NAME }}
 
     permissions:
       contents: write
     steps:
     - name: Checkout
       uses: actions/checkout@v6
-              
+
+    - name: Parse, dedupe and sort DEVICE_NAME
+      run: |
+        raw='${{ inputs.DEVICE_NAME }}'
+        devices=$(echo "$raw" \
+          | tr ',' '\n' \
+          | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+          | grep -v '^$' \
+          | sort -u \
+          | tr '\n' ' ')
+        devices="${devices% }"
+        if [ -z "$devices" ]; then
+          echo "::error::No valid device codenames found in DEVICE_NAME."
+          exit 1
+        fi
+        echo "DEVICES=$devices" >> "$GITHUB_ENV"
+        echo "Build order (sequential, one runner): $devices"
+
     - name: Clean-up
       uses: rokibhasansagar/slimhub_actions@main
 
@@ -69,7 +81,7 @@ jobs:
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 12
-      
+
     - name: Build Environment
       run: |
         sudo apt install aria2 -y
@@ -81,7 +93,7 @@ jobs:
       uses: hendrikmuhs/ccache-action@v1.2
       with:
         max-size: "10G"
-      
+
     - name: Set-up Manifest # For github workspace use single {}
       run: |
         mkdir -p ${GITHUB_WORKSPACE}/OrangeFox
@@ -90,76 +102,194 @@ jobs:
         git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
         git clone https://gitlab.com/OrangeFox/sync.git -b master
         cd sync
-        ./orangefox_sync.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
-      
-    - name: Clone Device Tree
-      run: |
-        cd ${{ env.ORANGEFOX_ROOT }}
-        git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./${{ inputs.DEVICE_PATH }}
-        cd ${{ inputs.DEVICE_PATH }}
-        echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
-    - name: Building OrangeFox
+        # Patch orangefox_sync.sh so the local manifest is cloned into
+        # .repo/local_manifests inside get_twrp_minimal_manifest(), right
+        # before its own "repo_sync;" call (which runs right after "repo
+        # init"). This puts the local manifest in place as part of the
+        # script's single sync pass, instead of pre-seeding the directory
+        # before the script runs and hoping its own repo init doesn't
+        # touch it.
+        cat /dev/null > /tmp/lm_snippet.sh
+        echo '  echo "-- Applying local manifest ...";' >> /tmp/lm_snippet.sh
+        echo '  rm -rf .repo/local_manifests;' >> /tmp/lm_snippet.sh
+        echo "  git clone ${{ inputs.LOCAL_MANIFEST }} -b ${{ inputs.LOCAL_MANIFEST_BRANCH }} .repo/local_manifests;" >> /tmp/lm_snippet.sh
+        echo '  [ "$?" != "0" ] && abort "-- Failed to clone the local manifest. Quitting.";' >> /tmp/lm_snippet.sh
+        echo '  echo "-- Local manifest applied.";' >> /tmp/lm_snippet.sh
+
+        awk -v snippet_file=/tmp/lm_snippet.sh '
+          /^  repo_sync;$/ { while ((getline line < snippet_file) > 0) print line }
+          { print }
+        ' orangefox_sync.sh > orangefox_sync.sh.patched && mv orangefox_sync.sh.patched orangefox_sync.sh
+        chmod +x orangefox_sync.sh
+
+        echo "-- Patched get_twrp_minimal_manifest():"
+        sed -n '/^get_twrp_minimal_manifest/,/^}/p' orangefox_sync.sh
+
+        ./orangefox_sync.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
+
+    - name: Verify local manifest survived sync
       run: |
-        pushd ${{ env.ORANGEFOX_ROOT }}
+        lm_dir="${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests"
+        if [ ! -d "$lm_dir" ] || [ -z "$(find "$lm_dir" -maxdepth 1 -name '*.xml' -print -quit)" ]; then
+          echo "::error::.repo/local_manifests is missing or empty after orangefox_sync.sh ran — the local manifest did not survive the sync. Stopping before build."
+          exit 1
+        fi
+        echo "local_manifests present after sync:"
+        ls -la "$lm_dir"
+
+    - name: Build each device sequentially
+      run: |
         set +e
         export USE_CCACHE=1
         export CCACHE_EXEC=/usr/bin/ccache
-        sed -i 's/return sandboxConfig\.working/return false/g' build/soong/ui/build/sandbox_linux.go
-        source build/envsetup.sh
-        export ALLOW_MISSING_DEPENDENCIES=true
-        set -e
-        lunch twrp_${{ inputs.DEVICE_NAME }}-eng && make clean && mka adbd ${{ inputs.BUILD_TARGET }}image
-        popd
-
-    - name: Set Build Date # Build date in UTC
-      run: |
         echo "BUILD_DATE=$(TZ=UTC date +%Y%m%d)" >> $GITHUB_ENV
+        mkdir -p /tmp/ofrp_results
+        FAILED_DEVICES=""
 
-    - name: Check if the recovery exists # It makes the recovery.img and renames it to Orangefox*.img but the OG should also work
+        for DEVICE in $DEVICES; do
+          echo "::group::Building $DEVICE"
+          OUTPUT_DIR="${{ env.ORANGEFOX_ROOT }}/out/target/product/$DEVICE"
+          result_file="/tmp/ofrp_results/$DEVICE.env"
+
+          pushd ${{ env.ORANGEFOX_ROOT }} > /dev/null
+          sed -i 's/return sandboxConfig\.working/return false/g' build/soong/ui/build/sandbox_linux.go
+          source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          # TW_NO_USB_STORAGE=false is passed here, not just in BoardConfig.mk,
+          # because something downstream in the source tree keeps resetting it
+          # back to true regardless of the device tree's own setting (confirmed
+          # across multiple builds — BoardConfig.mk says false, recovery.log
+          # still prints true at boot). A command-line make variable sits above
+          # every in-tree ":=" assignment in Make's precedence order, so this
+          # should win regardless of where the override is coming from. If the
+          # next recovery.log STILL prints true even with this, the printed
+          # value isn't a compile-time flag at all and the investigation needs
+          # to move to TWRP's runtime/C++ defaults instead.
+          lunch twrp_${DEVICE}-eng && make clean && mka adbd TW_NO_USB_STORAGE=false ${{ inputs.BUILD_TARGET }}image
+          BUILD_EXIT_CODE=$?
+          popd > /dev/null
+
+          if [ $BUILD_EXIT_CODE -ne 0 ]; then
+            echo "::error::mka exited with code $BUILD_EXIT_CODE for $DEVICE — build did not complete cleanly."
+            echo "STATUS=failed" > "$result_file"
+            FAILED_DEVICES="$FAILED_DEVICES $DEVICE"
+            echo "::endgroup::"
+            continue
+          fi
+
+          # OrangeFox's post-build hook (Fox_After_Recovery_Image) renames the
+          # finished image straight to OrangeFox-<ver>-<type>-<device>.img —
+          # a plain "recovery*.img"/"boot*.img" is never left behind. Check
+          # both patterns so a successful OrangeFox-renamed build isn't
+          # mistaken for a missing image.
+          img_file=$(find "$OUTPUT_DIR" \( -name "${{ inputs.BUILD_TARGET }}*.img" -o -name "OrangeFox*.img" \) -print -quit)
+          if [ -z "$img_file" ]; then
+            echo "::error::mka reported success but no ${{ inputs.BUILD_TARGET }}*.img or OrangeFox*.img was found under $OUTPUT_DIR for $DEVICE. Check whether '${{ inputs.BUILD_TARGET }}image' is a valid make target for this device (e.g. BOARD_USES_RECOVERY_AS_BOOT may replace it with bootimage/vendorbootimage)."
+            echo "STATUS=failed" > "$result_file"
+            FAILED_DEVICES="$FAILED_DEVICES $DEVICE"
+            echo "::endgroup::"
+            continue
+          fi
+          echo "Found image: $img_file"
+
+          # Fix update-binary in flashable zip
+          zip_file=$(find "$OUTPUT_DIR" -name "OrangeFox*.zip" -print -quit)
+          if [ -n "$zip_file" ]; then
+            echo "Patching update-binary in $zip_file"
+            work_dir=$(mktemp -d)
+            unzip -o "$zip_file" META-INF/com/google/android/update-binary -d "$work_dir" >/dev/null
+            ub="$work_dir/META-INF/com/google/android/update-binary"
+            # SignApk re-zips without preserving Unix mode bits, so update-binary
+            # loses its executable bit; and #!/system/bin/sh doesn't exist yet
+            # when the updater is exec'd in recovery (system isn't mounted),
+            # so TWRP fails to run it at all (Updater process ended with ERROR: 255,
+            # no ui_print output). Fix both: shebang -> /sbin/sh, chmod 0755.
+            sed -i '1s|^#!/system/bin/sh|#!/sbin/sh|' "$ub"
+            chmod 0755 "$ub"
+            head -1 "$ub"
+            (cd "$work_dir" && zip -X "$zip_file" META-INF/com/google/android/update-binary)
+            rm -rf "$work_dir"
+            echo "Patched entry:"
+            unzip -l "$zip_file" | grep update-binary
+          else
+            echo "No OrangeFox zip found under $OUTPUT_DIR — nothing to patch."
+          fi
+
+          MD5_IMG=$(md5sum "$img_file" | cut -d ' ' -f 1)
+          MD5_ZIP=""
+          if [ -n "$zip_file" ]; then
+            MD5_ZIP=$(md5sum "$zip_file" | cut -d ' ' -f 1)
+          else
+            echo "::warning::The zip file isn't present but make sure the image is from only after 100% completion in build stage"
+          fi
+
+          {
+            echo "STATUS=ok"
+            echo "OUTPUT_DIR=$OUTPUT_DIR"
+            echo "MD5_IMG=$MD5_IMG"
+            echo "MD5_ZIP=$MD5_ZIP"
+          } > "$result_file"
+
+          if [ "${{ inputs.LDCHECK }}" = "true" ]; then
+            echo "Running LDCheck for $DEVICE"
+            dest="$OUTPUT_DIR/$DEVICE/recovery/root"
+            mkdir -p "$dest"
+            cp -n tools/libneeds "$dest/" 2>/dev/null
+            cp -n tools/ldcheck "$dest/" 2>/dev/null
+            (cd "$dest" && python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ inputs.LDCHECKPATH }})
+            echo "Done checking missing dependencies for $DEVICE. Review, and reconfigure your tree."
+          fi
+
+          echo "::endgroup::"
+        done
+
+        set -e
+        if [ -n "$FAILED_DEVICES" ]; then
+          echo "BUILD_FAILED_DEVICES=$FAILED_DEVICES" >> $GITHUB_ENV
+          echo "::warning::These devices failed to build and will be skipped at release time:$FAILED_DEVICES"
+        fi
+
+    - name: Release all successfully built devices
       if: always()
       run: |
-        img_file=$(find "${{ env.OUTPUT_DIR }}" -name "${{ inputs.BUILD_TARGET }}*.img" -print -quit)
-        zip_file=$(find "${{ env.OUTPUT_DIR }}" -name "OrangeFox*.zip" -print -quit)
-        if [ -f "$img_file" ]; then
-            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
-            echo "MD5_IMG=$(md5sum "$img_file" | cut -d ' ' -f 1)" >> $GITHUB_ENV
-        else
-            echo "Recovery out directory is empty."
-        fi
-        if [ -f "$zip_file" ]; then
-            echo "CHECK_ZIP_IS_OK=true" >> $GITHUB_ENV
-            echo "MD5_ZIP=$(md5sum "$zip_file" | cut -d ' ' -f 1)" >> $GITHUB_ENV
-        else
-            echo "::warning::The zip file isn't present but make sure the image is from only after 100% completion in build stage"
-        fi
+        set +e
+        RELEASE_FAILED_DEVICES=""
 
-    - name: Upload to Release
-      if: env.CHECK_IMG_IS_OK == 'true'
-      uses: softprops/action-gh-release@master
-      with:
-        files: |
-          ${{ env.OUTPUT_DIR }}/OrangeFox*.img
-          ${{ env.OUTPUT_DIR }}/OrangeFox*.tar
-          ${{ env.OUTPUT_DIR }}/OrangeFox*.zip
-          ${{ env.OUTPUT_DIR }}/ramdisk-recovery.*
-        name: Unofficial OrangeFox for ${{ inputs.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
-        tag_name: ${{ github.run_id }}
-        body: |
-          Build: ${{ inputs.MANIFEST_BRANCH }}
-          Device: [Device Tree/Branch](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
-          Commit: Most recent [commit](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
-          MD5 (img): ${{ env.MD5_IMG }}
-          MD5 (zip): ${{ env.MD5_ZIP }}
-        prerelease: true
+        for DEVICE in $DEVICES; do
+          result_file="/tmp/ofrp_results/$DEVICE.env"
+          if [ ! -f "$result_file" ]; then
+            echo "::warning::No build result recorded for $DEVICE — skipping release."
+            continue
+          fi
+          source "$result_file"
+          if [ "$STATUS" != "ok" ]; then
+            echo "Skipping release for $DEVICE — build did not succeed."
+            continue
+          fi
 
-    - name: Run LDCheck
-      if: inputs.LDCHECK == 'true'
-      run: |
-        cd tools
-        mv -n libneeds ${GITHUB_WORKSPACE}/${{ env.OUTPUT_DIR }}/${{ inputs.DEVICE_NAME }}/recovery/root/
-        mv -n ldcheck ${GITHUB_WORKSPACE}/${{ env.OUTPUT_DIR }}/${{ inputs.DEVICE_NAME }}/recovery/root/
-        cd ${GITHUB_WORKSPACE}/${{ env.OUTPUT_DIR }}/${{ inputs.DEVICE_NAME }}/recovery/root
-        python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ inputs.LDCHECKPATH }}
-        echo "Done checking missing dependencies. Review, and reconfigure your tree."
-      continue-on-error: true
+          echo "::group::Releasing $DEVICE"
+          release_files=""
+          for f in "$OUTPUT_DIR"/OrangeFox*.img "$OUTPUT_DIR"/OrangeFox*.tar "$OUTPUT_DIR"/OrangeFox*.zip "$OUTPUT_DIR"/ramdisk-recovery.*; do
+            [ -f "$f" ] && release_files="$release_files $f"
+          done
+          gh release create "${DEVICE}-${{ env.BUILD_DATE }}-${{ github.run_id }}" \
+            $release_files \
+            --title "Unofficial OrangeFox for $DEVICE // ${{ env.BUILD_DATE }}" \
+            --notes "Build: ${{ inputs.MANIFEST_BRANCH }}
+          Local Manifest: [${{ inputs.LOCAL_MANIFEST }}](${{ inputs.LOCAL_MANIFEST }}/tree/${{ inputs.LOCAL_MANIFEST_BRANCH }})
+          MD5 (img): $MD5_IMG
+          MD5 (zip): $MD5_ZIP" \
+            --prerelease
+          if [ $? -ne 0 ]; then
+            echo "::error::gh release create failed for $DEVICE"
+            RELEASE_FAILED_DEVICES="$RELEASE_FAILED_DEVICES $DEVICE"
+          fi
+          echo "::endgroup::"
+        done
+
+        set -e
+        if [ -n "${{ env.BUILD_FAILED_DEVICES }}" ] || [ -n "$RELEASE_FAILED_DEVICES" ]; then
+          echo "::error::Build failures:${{ env.BUILD_FAILED_DEVICES }} | Release failures:$RELEASE_FAILED_DEVICES"
+          exit 1
+        fi
