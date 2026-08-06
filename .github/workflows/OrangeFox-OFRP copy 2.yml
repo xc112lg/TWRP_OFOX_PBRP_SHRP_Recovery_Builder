@@ -114,6 +114,16 @@ jobs:
         cd sync
         ./orangefox_sync.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
 
+    - name: Verify local manifest survived sync
+      run: |
+        lm_dir="${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests"
+        if [ ! -d "$lm_dir" ] || [ -z "$(find "$lm_dir" -maxdepth 1 -name '*.xml' -print -quit)" ]; then
+          echo "::error::.repo/local_manifests is missing or empty after orangefox_sync.sh ran — the local manifest did not survive the sync's own repo init/sync. Stopping before build."
+          exit 1
+        fi
+        echo "local_manifests present after sync:"
+        ls -la "$lm_dir"
+
     - name: Build each device sequentially
       run: |
         set +e
