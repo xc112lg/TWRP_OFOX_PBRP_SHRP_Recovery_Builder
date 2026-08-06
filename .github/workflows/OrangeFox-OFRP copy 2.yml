@@ -13,11 +13,11 @@ on:
         - 11.0
       DEVICE_TREE:
         description: 'Custom Recovery Tree'
-        #required: true
+      #  required: true
         default: ''
       DEVICE_TREE_BRANCH:
         description: 'Custom Recovery Tree Branch (use master if default)'
-      #  required: true
+     #   required: true
         default: 'main'
       LOCAL_MANIFEST:
         description: 'Local Manifest repo URL (optional — leave empty to skip)' # e.g. a repo containing local_manifest.xml with your device/kernel/vendor projects
@@ -33,7 +33,7 @@ on:
         default: ''
       DEVICE_PATH:
         description: 'Specify your Device Path (Check the DEVICE_PATH in BoardConfig.mk)' # As is, just like your DEVICE_PATH in your BoardConfig.mk
-        #required: true
+      #  required: true
         default: ''
       BUILD_TARGET:
         description: 'Specify your Build Target' # The image suffix will be added later in build step.
@@ -126,6 +126,19 @@ jobs:
         else
           git clone ${{ inputs.LOCAL_MANIFEST }} .repo/local_manifests
         fi
+        # repo sync fails with "unsupported checkout state" when a project
+        # path declared in the local manifest already has a checkout on disk
+        # from the base manifest sync (e.g. a local manifest that overrides
+        # bootable/recovery with a different remote/revision) — repo tries
+        # to reconcile the existing worktree with the new project definition
+        # instead of doing a clean clone. Wipe any path the local manifest
+        # itself re-declares so repo starts fresh for those projects only.
+        for path in $(grep -oh 'path="[^"]*"' .repo/local_manifests/*.xml 2>/dev/null | sed -e 's/path="//' -e 's/"$//'); do
+          if [ -d "$path" ]; then
+            echo "Removing existing checkout at $path so repo can re-clone it per the local manifest"
+            rm -rf "$path"
+          fi
+        done
         repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
     - name: Clone Device Tree # Shared by all devices below (same DEVICE_TREE/DEVICE_PATH for every codename)
