@@ -13,11 +13,11 @@ on:
         - 11.0
       DEVICE_TREE:
         description: 'Custom Recovery Tree'
-        required: true
+        #required: true
         default: ''
       DEVICE_TREE_BRANCH:
         description: 'Custom Recovery Tree Branch (use master if default)'
-        required: true
+      #  required: true
         default: 'main'
       LOCAL_MANIFEST:
         description: 'Local Manifest repo URL (optional — leave empty to skip)' # e.g. a repo containing local_manifest.xml with your device/kernel/vendor projects
@@ -33,7 +33,7 @@ on:
         default: ''
       DEVICE_PATH:
         description: 'Specify your Device Path (Check the DEVICE_PATH in BoardConfig.mk)' # As is, just like your DEVICE_PATH in your BoardConfig.mk
-        required: true
+        #required: true
         default: ''
       BUILD_TARGET:
         description: 'Specify your Build Target' # The image suffix will be added later in build step.
