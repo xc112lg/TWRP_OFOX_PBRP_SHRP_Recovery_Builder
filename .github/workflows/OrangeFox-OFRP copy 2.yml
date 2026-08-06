@@ -11,29 +11,17 @@ on:
         options:
         - 12.1
         - 11.0
-      DEVICE_TREE:
-        description: 'Custom Recovery Tree'
-       # required: true
-        default: ''
-      DEVICE_TREE_BRANCH:
-        description: 'Custom Recovery Tree Branch (use master if default)'
-        #required: true
-        default: 'main'
       LOCAL_MANIFEST:
-        description: 'Local Manifest repo URL (optional — leave empty to skip)' # e.g. a repo containing local_manifest.xml with your device/kernel/vendor projects
-        required: false
+        description: 'Local Manifest repo URL (contains your device/kernel/vendor projects)'
+        required: true
         default: ''
       LOCAL_MANIFEST_BRANCH:
         description: 'Local Manifest Branch'
         required: false
         default: 'main'
       DEVICE_NAME:
-        description: 'Device Codename(s) — comma-separated for multi-device, e.g. h870, h872' # Must all be built by the same DEVICE_TREE/DEVICE_PATH below. Devices are built one-after-another on a single runner.
+        description: 'Device Codename(s) — comma-separated for multi-device, e.g. h870, h872' # Must all be provided by the same LOCAL_MANIFEST above. Devices are built one-after-another on a single runner.
         required: true
-        default: ''
-      DEVICE_PATH:
-        description: 'Specify your Device Path (Check the DEVICE_PATH in BoardConfig.mk)' # As is, just like your DEVICE_PATH in your BoardConfig.mk
-       # required: true
         default: ''
       BUILD_TARGET:
         description: 'Specify your Build Target' # The image suffix will be added later in build step.
@@ -107,7 +95,6 @@ jobs:
         max-size: "10G"
 
     - name: Apply Local Manifest # Must run before orangefox_sync.sh, so repo init+sync inside that script picks up the local manifest in a single pass
-      if: inputs.LOCAL_MANIFEST != ''
       run: |
         mkdir -p ${{ env.ORANGEFOX_ROOT }}/.repo
         rm -rf ${{ env.ORANGEFOX_ROOT }}/.repo/local_manifests
@@ -126,13 +113,6 @@ jobs:
         git clone https://gitlab.com/OrangeFox/sync.git -b master
         cd sync
         ./orangefox_sync.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
-
-    - name: Clone Device Tree # Shared by all devices below (same DEVICE_TREE/DEVICE_PATH for every codename)
-      run: |
-        cd ${{ env.ORANGEFOX_ROOT }}
-        git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./${{ inputs.DEVICE_PATH }}
-        cd ${{ inputs.DEVICE_PATH }}
-        echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
     - name: Build each device sequentially
       run: |
@@ -273,8 +253,7 @@ jobs:
             $release_files \
             --title "Unofficial OrangeFox for $DEVICE // ${{ env.BUILD_DATE }}" \
             --notes "Build: ${{ inputs.MANIFEST_BRANCH }}
-          Device: [Device Tree/Branch](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
-          Commit: Most recent [commit](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
+          Local Manifest: [${{ inputs.LOCAL_MANIFEST }}](${{ inputs.LOCAL_MANIFEST }}/tree/${{ inputs.LOCAL_MANIFEST_BRANCH }})
           MD5 (img): $MD5_IMG
           MD5 (zip): $MD5_ZIP" \
             --prerelease
