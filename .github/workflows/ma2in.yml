@@ -1,4 +1,4 @@
-name: OrangeFox [OFRP] fix test 2
+name: OrangeFox [OFRP] fix test 1
 
 on:
   workflow_dispatch:
@@ -166,7 +166,7 @@ jobs:
           # next recovery.log STILL prints true even with this, the printed
           # value isn't a compile-time flag at all and the investigation needs
           # to move to TWRP's runtime/C++ defaults instead.
-          lunch twrp_${DEVICE}-eng && make clean && mka adbd TW_NO_USB_STORAGE=false ${{ inputs.BUILD_TARGET }}image
+          lunch twrp_${DEVICE}-eng && mka installclean && mka adbd TW_NO_USB_STORAGE=false ${{ inputs.BUILD_TARGET }}image
           BUILD_EXIT_CODE=$?
           popd > /dev/null
 
@@ -224,12 +224,13 @@ jobs:
             echo "::warning::The zip file isn't present but make sure the image is from only after 100% completion in build stage"
           fi
 
-          # 'make clean' for the NEXT device wipes the entire out/ tree, not
-          # just this device's out/target/product/<device> subfolder — so
-          # anything left under $OUTPUT_DIR will be gone by the time the
-          # release step runs after all devices have built. Copy the release
-          # artifacts out to a persistent, per-device staging dir now, while
-          # they still exist.
+          # 'mka installclean' is scoped to the current device's $OUT
+          # (out/target/product/<device>), so it shouldn't touch other
+          # devices' output the way a bare 'make clean' did. Still, stage
+          # the release artifacts to a persistent, per-device dir now —
+          # this decouples the release step from out/ staying intact for
+          # every device all the way until the end of the job, which is a
+          # fragile assumption to rely on across a long sequential build.
           ARTIFACT_DIR="/tmp/ofrp_artifacts/$DEVICE"
           mkdir -p "$ARTIFACT_DIR"
           for f in "$OUTPUT_DIR"/OrangeFox*.img "$OUTPUT_DIR"/OrangeFox*.tar "$OUTPUT_DIR"/OrangeFox*.zip "$OUTPUT_DIR"/ramdisk-recovery.*; do
