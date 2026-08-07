@@ -331,12 +331,12 @@ jobs:
           --title "$RELEASE_TITLE" \
           --notes "**Devices:** $SUCCESSFUL_DEVICES
 
-**Branch:** ${{ inputs.MANIFEST_BRANCH }}
-
-**Local Manifest:** [${{ inputs.LOCAL_MANIFEST }}](${{ inputs.LOCAL_MANIFEST }}/tree/${{ inputs.LOCAL_MANIFEST_BRANCH }})
-
-**MD5 Checksums:**
-$RELEASE_NOTES_MD5" \
+          **Branch:** ${{ inputs.MANIFEST_BRANCH }}
+          
+          **Local Manifest:** [${{ inputs.LOCAL_MANIFEST }}](${{ inputs.LOCAL_MANIFEST }}/tree/${{ inputs.LOCAL_MANIFEST_BRANCH }})
+          
+          **MD5 Checksums:**
+          $RELEASE_NOTES_MD5" \
           --prerelease
         
         if [ $? -ne 0 ]; then
