@@ -233,17 +233,8 @@ jobs:
           # fragile assumption to rely on across a long sequential build.
           ARTIFACT_DIR="/tmp/ofrp_artifacts/$DEVICE"
           mkdir -p "$ARTIFACT_DIR"
-          for f in "$OUTPUT_DIR"/OrangeFox*.img "$OUTPUT_DIR"/OrangeFox*.tar "$OUTPUT_DIR"/OrangeFox*.zip "$OUTPUT_DIR"/ramdisk-recovery.*; do
-            if [ -f "$f" ]; then
-              # Copy device-specific OrangeFox files as-is
-              if [[ "$f" == *"OrangeFox"* ]]; then
-                cp -f "$f" "$ARTIFACT_DIR/"
-              else
-                # Rename ramdisk files to include device name (avoid conflicts in combined release)
-                filename=$(basename "$f")
-                cp -f "$f" "$ARTIFACT_DIR/${filename%.*}-$DEVICE.${filename##*.}"
-              fi
-            fi
+          for f in "$OUTPUT_DIR"/OrangeFox*.img "$OUTPUT_DIR"/OrangeFox*.tar "$OUTPUT_DIR"/OrangeFox*.zip; do
+            [ -f "$f" ] && cp -f "$f" "$ARTIFACT_DIR/"
           done
           echo "Staged artifacts for $DEVICE:"
           ls -la "$ARTIFACT_DIR"
