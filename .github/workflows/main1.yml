@@ -11,6 +11,7 @@ on:
         options:
         - 12.1
         - 11.0
+        - 14.1
       LOCAL_MANIFEST:
         description: 'Local Manifest repo URL (contains your device/kernel/vendor projects)'
         required: true
